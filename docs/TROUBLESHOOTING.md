@@ -203,7 +203,9 @@ Google has significantly tightened quota and rate-limit enforcement. This affect
 Rate limits typically reset after a few hours. If you're seeing persistent issues:
 - Stop using the affected account for 24-48 hours
 - Use a different account in the meantime
-- Check `rateLimitResetTimes` in your accounts file to see when limits expire
+- Run `opencode-agy quota` to see current remaining quota per account
+
+Rate-limit state is tracked in memory only, so it resets when the process restarts and is never written to `antigravity-accounts.json`.
 
 </details>
 

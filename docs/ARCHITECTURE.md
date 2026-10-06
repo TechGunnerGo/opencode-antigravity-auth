@@ -191,11 +191,19 @@ Claude rejects unsupported JSON Schema features. The plugin uses an **allowlist 
 3. **Automatic failover** - On 429, switch to the next available Antigravity account
 4. **Optional Gemini fallback** - Configured API keys can route Gemini requests through the public API
 
+### Quota and Limit State
+
+Rate-limit reset times, account cooldowns, and the soft-quota cache live in memory
+only. They are never written to disk, so a new process starts with no knowledge of
+limits other processes have seen. Each process manages its own backoff state.
+
 ### Account Storage
 
 Location: `~/.config/opencode/antigravity-accounts.json`
 
-Contains OAuth refresh tokens - treat as sensitive.
+Contains OAuth refresh tokens - treat as sensitive. Holds account identity and
+user-managed settings (tokens, project IDs, enabled flag, fingerprint, verification
+and re-auth markers) only.
 
 ---
 

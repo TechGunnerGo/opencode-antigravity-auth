@@ -11,7 +11,7 @@ import {
 import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
 import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
 import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
-import { pressEnterToContinue, promptAddAnotherAccount, promptLoginMode, promptProjectId, type LoginMenuResult } from "./plugin/cli";
+import { pressEnterToContinue, promptAddAnotherAccount, promptLoginMode, promptProjectId, type AccountStatus, type LoginMenuResult } from "./plugin/cli";
 import { ensureProjectContext } from "./plugin/project";
 import {
   startAntigravityDebugRequest, 
@@ -160,6 +160,39 @@ function resetAllAccountsBlockedToasts(): void {
 }
 
 const quotaRefreshInProgressByEmail = new Set<string>();
+
+/**
+ * Derive a menu status for a stored account. Rate-limit and quota state is in-memory
+ * only, so it is read from the live AccountManager when one is running; a stored
+ * account with no live counterpart has no limits and is reported as active.
+ */
+function resolveStoredAccountStatus(
+  account: import("./plugin/storage").AccountMetadataV3,
+  index: number,
+): AccountStatus {
+  // Precedence matches the CLI menu (account-manager-cli.ts): verification is the
+  // actionable state, so it wins over a stale re-auth marker.
+  if (account.verificationRequired) {
+    return "verification-required";
+  }
+  if (account.reauthRequired) {
+    return "expired";
+  }
+
+  const live = activeAccountManager?.getAccounts()[index];
+  if (!live || live.email !== account.email) {
+    return "active";
+  }
+
+  if (activeAccountManager?.isAccountCoolingDown(live)) {
+    return "rate-limited";
+  }
+  const now = Date.now();
+  const hasLiveLimit = Object.values(live.rateLimitResetTimes).some(
+    (resetTime) => typeof resetTime === "number" && resetTime > now,
+  );
+  return hasLiveLimit ? "rate-limited" : "active";
+}
 
 function defaultRetryMsForConfig(config: AntigravityConfig): number {
   return (config.default_retry_after_seconds ?? 60) * 1000;
@@ -448,8 +481,8 @@ async function triggerAsyncQuotaRefreshForAccount(
     const results = await checkAccountsQuota([singleAccount], client, providerId);
     
     if (results[0]?.status === "ok" && results[0]?.quota?.groups) {
+      // Quota cache is in-memory only; nothing to persist.
       accountManager.updateQuotaCache(accountIndex, results[0].quota.groups);
-      accountManager.requestSaveToDisk();
     }
   } catch (err) {
     log.debug(`quota-refresh-failed email=${accountKey}`, { error: String(err) });
@@ -2805,8 +2838,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                   accountManager.markRateLimitedWithReason(account, family, headerStyle, model, rateLimitReason, serverRetryMs, config.failure_ttl_seconds * 1000);
 
-                  accountManager.requestSaveToDisk();
-
                   const agySdkFallbackResponse = await tryAgySdkFallbackForRequest(
                     input,
                     init,
@@ -3206,31 +3237,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (existingStorage && existingStorage.accounts.length > 0) {
               let menuResult: LoginMenuResult;
               while (true) {
-                const now = Date.now();
                 const existingAccounts = existingStorage.accounts.map((acc, idx) => {
-                  let status: 'active' | 'rate-limited' | 'expired' | 'verification-required' | 'unknown' = 'unknown';
-
-                  if (acc.verificationRequired) {
-                    status = 'verification-required';
-                  } else {
-                    const rateLimits = acc.rateLimitResetTimes;
-                    if (rateLimits) {
-                      const isRateLimited = Object.values(rateLimits).some(
-                        (resetTime) => typeof resetTime === 'number' && resetTime > now
-                      );
-                      if (isRateLimited) {
-                        status = 'rate-limited';
-                      } else {
-                        status = 'active';
-                      }
-                    } else {
-                      status = 'active';
-                    }
-
-                    if (acc.coolingDownUntil && acc.coolingDownUntil > now) {
-                      status = 'rate-limited';
-                    }
-                  }
+                  // Quota/limit state lives only in the running manager, so a
+                  // stored account with no live counterpart is simply "active".
+                  const status = resolveStoredAccountStatus(acc, idx);
 
                   return {
                     email: acc.email,
@@ -3333,22 +3343,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     }
                     console.log("");
 
-                    // Cache quota data for soft quota protection
+                    // Quota results feed soft-quota protection in memory only; a
+                    // separate process cannot hand them to this one via disk.
                     if (res.quota?.groups) {
-                      const acc = existingStorage.accounts[res.index];
-                      if (acc) {
-                        acc.cachedQuota = res.quota.groups;
-                        acc.cachedQuotaUpdatedAt = Date.now();
-                        storageUpdated = true;
-                      }
+                      activeAccountManager?.updateQuotaCache(res.index, res.quota.groups);
                     }
 
                     if (res.updatedAccount) {
-                      existingStorage.accounts[res.index] = {
-                        ...res.updatedAccount,
-                        cachedQuota: res.quota?.groups,
-                        cachedQuotaUpdatedAt: Date.now(),
-                      };
+                      existingStorage.accounts[res.index] = res.updatedAccount;
                       storageUpdated = true;
                     }
                   }

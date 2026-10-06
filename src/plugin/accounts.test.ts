@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, resolveQuotaGroup, RATE_LIMIT_CLEAR_TTL_MS } from "./accounts";
+import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, resolveQuotaGroup } from "./accounts";
 import type { AccountStorageV4 } from "./storage";
 import type { OAuthAuthDetails } from "./types";
 import * as storageModule from "./storage";
@@ -1853,8 +1853,8 @@ describe("AccountManager", () => {
     });
   });
 
-  describe("snapshot records cleared quota keys", () => {
-    it("emits a clearedQuotaKeys marker so a cleared limit survives merge", async () => {
+  describe("quota/limit state stays in memory", () => {
+    it("omits rate-limit state from the persisted snapshot", async () => {
       const stored: AccountStorageV4 = {
         version: 4,
         accounts: [
@@ -1866,22 +1866,40 @@ describe("AccountManager", () => {
       const account = manager.getAccounts()[0]!;
 
       manager.markRateLimited(account, 60_000, "claude");
-      // Optimistic reset clears the claude limit in memory.
-      manager.clearAllRateLimitsForFamily("claude");
+      expect(account.rateLimitResetTimes.claude).toBeGreaterThan(0);
 
       const saveSpy = vi.mocked(storageModule.saveAccountsRuntimeState);
       saveSpy.mockClear();
       await manager.saveToDisk();
 
       expect(saveSpy).toHaveBeenCalledTimes(1);
-      const snapshot = saveSpy.mock.calls[0]![0];
-      const persisted = snapshot.accounts[0]!;
-      expect(persisted.rateLimitResetTimes?.claude).toBeUndefined();
-      expect(persisted.clearedQuotaKeys?.claude).toBeGreaterThan(0);
+      const persisted = saveSpy.mock.calls[0]![0].accounts[0]! as unknown as Record<string, unknown>;
+      expect(persisted.rateLimitResetTimes).toBeUndefined();
+      expect(persisted.clearedQuotaKeys).toBeUndefined();
+      expect(persisted.cachedQuota).toBeUndefined();
     });
 
+    it("starts a fresh manager with no rate-limit state from stored accounts", () => {
+      const stored = {
+        version: 4,
+        accounts: [
+          {
+            refreshToken: "r1",
+            projectId: "p1",
+            addedAt: 1,
+            lastUsed: 0,
+            // Legacy field an older version persisted.
+            rateLimitResetTimes: { claude: 9_999_999_999_999 },
+          },
+        ],
+        activeIndex: 0,
+      } as unknown as AccountStorageV4;
 
-    it("records the cleared generation (setAt) when a limit passively expires", async () => {
+      const manager = new AccountManager(undefined, stored);
+      expect(manager.getAccounts()[0]!.rateLimitResetTimes).toEqual({});
+    });
+
+    it("drops an expired limit in memory without leaving a tombstone", () => {
       vi.useFakeTimers();
       try {
         const base = 1_000_000;
@@ -1897,25 +1915,14 @@ describe("AccountManager", () => {
         const manager = new AccountManager(undefined, stored);
         const account = manager.getAccounts()[0]!;
 
-        // Limit set at `base` (this is the generation).
         manager.markRateLimited(account, 1_000, "claude");
-        expect(account.rateLimitSetTimes["claude"]).toBe(base);
+        expect(account.rateLimitResetTimes.claude).toBe(base + 1_000);
 
-        // Time advances past the reset → passive expiry records a tombstone.
+        // Past the reset: any read path prunes the expired limit.
         vi.setSystemTime(new Date(base + 5_000));
-        // Any read path triggers clearExpiredRateLimits.
         manager.getMinWaitTimeForFamily("claude");
 
-        const saveSpy = vi.mocked(storageModule.saveAccountsRuntimeState);
-        saveSpy.mockClear();
-        await manager.saveToDisk();
-
-        const persisted = saveSpy.mock.calls[0]![0].accounts[0]!;
-        expect(persisted.rateLimitResetTimes?.claude).toBeUndefined();
-        // The tombstone is versioned with the GENERATION it cleared (the original setAt),
-        // not merely the wall-clock time of expiry.
-        expect(persisted.clearedSetTimes?.claude).toBe(base);
-        expect(persisted.clearedQuotaKeys?.claude).toBe(base + 5_000);
+        expect(account.rateLimitResetTimes.claude).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }

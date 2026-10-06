@@ -3,6 +3,7 @@ import {
   promptAddAnotherAccount,
   promptLoginMode,
   promptProjectId,
+  type AccountStatus,
   type ExistingAccountInfo,
   type LoginMenuResult,
 } from "./cli";
@@ -465,21 +466,9 @@ export async function displayAccountsQuota(
     }
     console.log("");
 
-    if (res.quota?.groups) {
-      const acc = storage.accounts[res.index];
-      if (acc) {
-        acc.cachedQuota = res.quota.groups;
-        acc.cachedQuotaUpdatedAt = Date.now();
-        storageUpdated = true;
-      }
-    }
-
+    // Quota data is in-memory only; the CLI process reports it and moves on.
     if (res.updatedAccount) {
-      storage.accounts[res.index] = {
-        ...res.updatedAccount,
-        cachedQuota: res.quota?.groups,
-        cachedQuotaUpdatedAt: Date.now(),
-      };
+      storage.accounts[res.index] = res.updatedAccount;
       storageUpdated = true;
     }
   }
@@ -528,34 +517,15 @@ export async function runInteractiveAccountManager(
     const existingStorage = await loadAccounts();
 
     if (existingStorage && existingStorage.accounts.length > 0) {
-      const now = Date.now();
       const existingAccounts = existingStorage.accounts.map((acc, idx) => {
-        let status:
-          | "active"
-          | "rate-limited"
-          | "expired"
-          | "verification-required"
-          | "unknown" = "unknown";
-
-        if (acc.reauthRequired) {
-          status = "expired";
-        } else if (acc.verificationRequired) {
-          status = "verification-required";
-        } else {
-          const rateLimits = acc.rateLimitResetTimes;
-          if (rateLimits) {
-            const isRateLimited = Object.values(rateLimits).some(
-              (resetTime) => typeof resetTime === "number" && resetTime > now,
-            );
-            status = isRateLimited ? "rate-limited" : "active";
-          } else {
-            status = "active";
-          }
-
-          if (acc.coolingDownUntil && acc.coolingDownUntil > now) {
-            status = "rate-limited";
-          }
-        }
+        // Rate-limit/quota state is in-memory only and never read back from disk, so a
+        // stored account that is neither expired nor blocked is "active". Precedence
+        // matches resolveStoredAccountStatus in plugin.ts.
+        const status: AccountStatus = acc.verificationRequired
+          ? "verification-required"
+          : acc.reauthRequired
+            ? "expired"
+            : "active";
 
         return {
           email: acc.email,

@@ -132,6 +132,10 @@ Accounts are stored in `~/.config/opencode/antigravity-accounts.json`:
 | `activeIndex` | Currently active account index |
 | `activeIndexByFamily` | Per-model-family active account (claude/gemini tracked separately) |
 
+Quota and limit state (rate-limit reset times, cooldowns, cached quota) is kept in
+memory only and is not written to this file. Each process tracks its own limits, and
+they reset when the process restarts.
+
 ---
 
 ## Token Revocation

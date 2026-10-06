@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Quota and limit state is now in-memory only** - Rate-limit reset times, account cooldowns, and the soft-quota cache are no longer written to `antigravity-accounts.json`. The file keeps account identity and user-managed settings only. Legacy fields left by earlier versions are ignored on read and stripped on the next write. Each process now tracks its own limits, so they reset on restart instead of being inherited from disk.
+- **Removed cross-process rate-limit merge machinery** - Per-key set timestamps, clear tombstones, generation markers, and the mutation-order merge that reconciled them across processes are gone, since there is no longer any persisted rate-limit state to reconcile. The administrative-ownership merge (identity, `enabled`, `projectId`) is unchanged.
+
 ## [1.8.0] - 2026-09-24
 
 ### Added
