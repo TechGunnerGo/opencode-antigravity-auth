@@ -154,6 +154,35 @@ describe("Antigravity transport through @ai-sdk/google", () => {
     expect(set).not.toHaveBeenCalled()
   })
 
+  it("never wipes the host credential when no revoke hook exists and an account remains", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input)
+      if (url.includes("antigravity-auto-updater")) return new Response("1.18.3")
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+    const directory = createDirectory()
+    const client = createClient()
+    // Deliberately no client.auth.revoke, so auth.set() is the only wipe path left.
+    const set = vi.spyOn(client.auth, "set")
+    const plugin = trackPlugin(await createAntigravityPlugin("google")({ client, directory, runtime: "v2" }))
+    const loaded = await plugin.auth.loader(async () => ({
+      type: "oauth",
+      refresh: "revoked-token|test-project|managed-project",
+      access: "expired-access",
+      expires: 1,
+    }), { id: "google" })
+    if (!isLoader(loaded)) throw new Error("OAuth did not produce a fetch loader")
+    const model = createGoogleGenerativeAI({ apiKey: "driver-placeholder", fetch: driverFetch(loaded) })("gemini-3-pro-preview")
+
+    await expect(model.doGenerate(generateOptions("high"))).rejects.toThrow()
+    // The account is only marked reauth-required, never removed, so this plugin still
+    // owns it. The destructive wipe must stay off until no account remains.
+    expect(set).not.toHaveBeenCalled()
+  })
+
   it("rewrites an OAuth Gemini request, retains the variant thinking level, and parses the Google driver response", async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

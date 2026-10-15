@@ -2438,17 +2438,30 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     index: account.index,
                   });
 
+                  if (initialAuthWasOAuth) {
+                    try {
+                      if (client.auth.revoke) {
+                        // Informational only: tells the host this specific token is dead so it
+                        // can prompt for reconnection. Safe to send regardless of how many
+                        // accounts remain, because it carries no destructive side effect.
+                        await client.auth.revoke(account.parts.refreshToken);
+                      }
+                    } catch (revokeError) {
+                      log.error("Failed to report the revoked Antigravity OAuth credential to the host", { error: String(revokeError) });
+                    }
+                  }
+
                   if (accountManager.getAccountCount() === 0) {
-                    if (initialAuthWasOAuth) {
+                    if (initialAuthWasOAuth && !client.auth.revoke) {
                       try {
-                        if (client.auth.revoke) {
-                          await client.auth.revoke(account.parts.refreshToken);
-                        } else {
-                          await client.auth.set({
-                            path: { id: providerId },
-                            body: { type: "oauth", refresh: "", access: "", expires: 0 },
-                          });
-                        }
+                        // Destructive fallback, used only when the host exposes no revoke hook:
+                        // wipe the stored credential so the host stops handing back a dead token.
+                        // Guarded because this plugin no longer owns any account that could serve
+                        // the request, so there is nothing left to protect the credential for.
+                        await client.auth.set({
+                          path: { id: providerId },
+                          body: { type: "oauth", refresh: "", access: "", expires: 0 },
+                        });
                       } catch (storeError) {
                         log.error("Failed to clear stored Antigravity OAuth credentials", { error: String(storeError) });
                       }

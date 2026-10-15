@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { dirname, join } from "node:path"
+
+// The fake home is a POSIX-shaped literal on every platform. Production builds the
+// output directory with path.join(), so the expectation must be derived the same way
+// instead of hardcoding "/" — otherwise these assertions fail on Windows.
+const FAKE_HOME = "/tmp/fake-home"
+const imageDir = () => join(FAKE_HOME, ".opencode", "generated-images")
 
 const mkdirSync = vi.fn()
 const writeFileSync = vi.fn()
@@ -24,7 +31,7 @@ describe("saveImageToDisk", () => {
 
   it("returns a path in the generated-images dir with an extension from the mime type", () => {
     const filePath = saveImageToDisk(Buffer.from("hello").toString("base64"), "image/jpeg")
-    expect(filePath.startsWith("/tmp/fake-home/.opencode/generated-images/")).toBe(true)
+    expect(dirname(filePath)).toBe(imageDir())
     expect(filePath.endsWith(".jpg")).toBe(true)
   })
 
@@ -33,7 +40,7 @@ describe("saveImageToDisk", () => {
     const filePath = saveImageToDisk(base64, "image/png")
 
     // The write must have completed by the time the path is returned.
-    expect(mkdirSync).toHaveBeenCalledWith("/tmp/fake-home/.opencode/generated-images", {
+    expect(mkdirSync).toHaveBeenCalledWith(imageDir(), {
       recursive: true,
     })
     expect(writeFileSync).toHaveBeenCalledTimes(1)
@@ -89,7 +96,7 @@ describe("processImageData", () => {
       mimeType: "image/png",
       data: Buffer.from("x").toString("base64"),
     })
-    expect(result).toContain("![Generated Image](/tmp/fake-home/.opencode/generated-images/")
+    expect(result).toContain(`![Generated Image](${imageDir()}`)
     expect(result).toContain("Image saved to:")
   })
 
