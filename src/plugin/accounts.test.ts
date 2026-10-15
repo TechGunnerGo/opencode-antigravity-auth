@@ -17,6 +17,17 @@ vi.mock("./storage", async (importOriginal) => {
   };
 });
 
+// Promise.withResolvers() is Node 22+. CI runs Node 20, so keep a portable
+// equivalent here rather than raising the engine floor for a test helper.
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  if (!resolve) throw new Error("Deferred promise resolver was not initialized");
+  return { promise, resolve };
+}
+
 describe("AccountManager", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -1040,7 +1051,7 @@ describe("AccountManager", () => {
     });
 
     it("waits for an in-flight save before persisting a revoked-account removal", async () => {
-      const staleSave = Promise.withResolvers<void>();
+      const staleSave = createDeferred<void>();
       vi.mocked(storageModule.saveAccounts).mockImplementationOnce(async () => staleSave.promise);
       vi.mocked(storageModule.removeAccountFromStorage).mockClear();
       const stored: AccountStorageV4 = {
