@@ -1,10 +1,24 @@
 {
     "name": "opencode-antigravity-auth",
-    "version": "1.8.0",
+    "version": "1.6.0",
     "description": "Google Antigravity IDE OAuth auth plugin for Opencode - access Gemini 3 Pro and Claude 4.6 using Google credentials",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        },
+        "./v1": {
+            "types": "./dist/v1.d.ts",
+            "import": "./dist/v1.js"
+        },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.js"
+        }
+    },
     "license": "MIT",
     "author": "noefabris",
     "repository": {
@@ -28,18 +42,12 @@
     "engines": {
         "node": ">=20.0.0"
     },
-    "bin": {
-        "opencode-antigravity": "./bin/cli.js",
-        "opencode-agy": "./bin/cli.js"
-    },
     "files": [
         "dist/",
         "README.md",
         "LICENSE"
     ],
     "scripts": {
-        "postinstall": "node script/install-bin.js",
-        "link-bin": "node script/install-bin.js",
         "build": "tsc -p tsconfig.build.json",
         "build:schema": "npx tsx script/build-schema.ts",
         "typecheck": "tsc --noEmit",
@@ -64,16 +72,12 @@
         "zod-to-json-schema": "^3.25.2"
     },
     "dependencies": {
+        "@ai-sdk/google": "^3.0.24",
         "@openauthjs/openauth": "^0.4.3",
         "@opencode-ai/plugin": "^0.15.31",
-        "@opencode/plugin": "^2.0.5",
+        "@opencode/plugin": "^2.0.27",
         "proper-lockfile": "^4.1.2",
         "xdg-basedir": "^5.1.0",
         "zod": "^4.4.3"
-    },
-    "allowScripts": {
-        "esbuild@0.28.2": true,
-        "msgpackr-extract@3.0.4": true,
-        "protobufjs@7.6.6": true
     }
 }

@@ -74,6 +74,14 @@ For example, `<REPOSITORY_PATH>` might be
 entrypoint from that directory and loads the V2 adapter exported by
 `dist/index.js`.
 
+The package publishes three subpath exports:
+
+| Export | Target | Use |
+| --- | --- | --- |
+| `opencode-antigravity-auth` | `dist/index.js` | V2 default — native plugin API plus the V1 server plugin under `server` |
+| `opencode-antigravity-auth/v1` | `dist/v1.js` | Legacy V1-only entrypoint for older hosts |
+| `opencode-antigravity-auth/server` | `dist/server.js` | Alias of the default export for hosts that expect a server entrypoint |
+
 #### OpenCode V1
 
 V1 uses the singular key `plugin` and points to the compiled V1 plugin file:

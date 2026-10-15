@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode v2 support** - Adopted the native v2 plugin API: OAuth integration, API-key authentication, model and thinking-variant registration, Google Search tool, and interrupted-tool recovery. An explicit Google provider preserves the existing Antigravity transport and account rotation. Package exports now expose `.` (v2 default), `./v1` (legacy entrypoint), and `./server` for older hosts. Supersedes the earlier legacy-shim `src/v2.ts` adapter, which has been removed.
+- **Gemini 3.5 Flash** - Added `gemini-3.5-flash` across both quota pools: Antigravity (`antigravity-gemini-3.5-flash`) and Gemini CLI (bare `gemini-3.5-flash`). Flash exposes `minimal`/`low`/`medium`/`high` thinking levels. Rollout-dependent.
+- **Gemini 3.5 Flash-Lite** - Added `gemini-3.5-flash-lite`, served through the public Gemini path with `minimal` as the default. The `gemini-flash-lite-latest` alias resolves to it, and deprecated sampling controls are stripped before requests are sent.
+- **Per-header-style rate limiting** - Gemini quota is now tracked independently for the `antigravity` and `gemini-cli` header styles, so exhausting one pool falls back to the other instead of blocking the account. Adds `clearAllRateLimitsForFamily()` and a `setPreferredAccount()` OAuth-account preference.
+
 ### Changed
 
 - **Quota and limit state is now in-memory only** - Rate-limit reset times, account cooldowns, and the soft-quota cache are no longer written to `antigravity-accounts.json`. The file keeps account identity and user-managed settings only. Legacy fields left by earlier versions are ignored on read and stripped on the next write. Each process now tracks its own limits, so they reset on restart instead of being inherited from disk.

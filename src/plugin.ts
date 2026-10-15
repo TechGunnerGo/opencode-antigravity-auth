@@ -1678,7 +1678,7 @@ function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
  * Creates an Antigravity OAuth plugin for a specific provider ID.
  */
 export const createAntigravityPlugin = (providerId: string) => async (
-  { client, directory }: PluginContext,
+  { client, directory, runtime = "v1" }: PluginContext,
 ): Promise<PluginResult> => {
   // Load configuration from files and environment variables
   const config = loadConfig(directory);
@@ -1686,6 +1686,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
   // Cached getAuth function for tool access
   let cachedGetAuth: GetAuth | null = null;
+  const refreshQueues = new Set<ProactiveRefreshQueue>();
+  const oauthListeners = new Set<OAuthListener>();
   
   // Initialize debug with config
   initializeDebug(config);
@@ -1725,7 +1727,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
   }
   
   // Initialize session recovery hook with full context
-  const sessionRecovery = createSessionRecoveryHook({ client, directory }, config);
+  const sessionRecovery = runtime === "v1"
+    ? createSessionRecoveryHook({ client, directory }, config)
+    : null;
   
   const updateChecker = createAutoUpdateCheckerHook(client, directory, {
     showStartupToast: true,
@@ -1850,6 +1854,17 @@ export const createAntigravityPlugin = (providerId: string) => async (
   });
 
   return {
+    dispose: () => {
+      updateChecker.dispose();
+      for (const queue of refreshQueues) queue.stop();
+      refreshQueues.clear();
+      for (const listener of oauthListeners) {
+        void listener.close().catch((error: unknown) => {
+          log.warn("OAuth listener cleanup failed", { error: String(error) });
+        });
+      }
+      oauthListeners.clear();
+    },
     event: eventHandler,
     tool: {
       google_search: googleSearchTool,
@@ -1898,6 +1913,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
     auth: {
     provider: providerId,
     loader: async (getAuth: GetAuth, provider: Provider): Promise<LoaderResult | Record<string, unknown>> => {
+      for (const queue of refreshQueues) queue.stop();
+      refreshQueues.clear();
       // Cache getAuth for tool access
       cachedGetAuth = getAuth;
 
@@ -1994,6 +2011,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
       // Note: AccountManager now ensures the current auth is always included in accounts
 
       const accountManager = await AccountManager.loadFromDisk(auth);
+      if (runtime === "v2" && initialAuthWasOAuth && authParts.refreshToken) {
+        accountManager.setPreferredAccount(authParts.refreshToken);
+      }
       activeAccountManager = accountManager;
       if (accountManager.getAccountCount() > 0) {
         accountManager.requestSaveToDisk();
@@ -2009,6 +2029,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
         });
         refreshQueue.setAccountManager(accountManager);
         refreshQueue.start();
+        refreshQueues.add(refreshQueue);
       }
 
       if (isDebugEnabled()) {
@@ -2417,9 +2438,26 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     index: account.index,
                   });
 
+                  if (initialAuthWasOAuth) {
+                    try {
+                      if (client.auth.revoke) {
+                        // Informational only: tells the host this specific token is dead so it
+                        // can prompt for reconnection. Safe to send regardless of how many
+                        // accounts remain, because it carries no destructive side effect.
+                        await client.auth.revoke(account.parts.refreshToken);
+                      }
+                    } catch (revokeError) {
+                      log.error("Failed to report the revoked Antigravity OAuth credential to the host", { error: String(revokeError) });
+                    }
+                  }
+
                   if (accountManager.getAccountCount() === 0) {
-                    if (initialAuthWasOAuth) {
+                    if (initialAuthWasOAuth && !client.auth.revoke) {
                       try {
+                        // Destructive fallback, used only when the host exposes no revoke hook:
+                        // wipe the stored credential so the host stops handing back a dead token.
+                        // Guarded because this plugin no longer owns any account that could serve
+                        // the request, so there is nothing left to protect the credential for.
                         await client.auth.set({
                           path: { id: providerId },
                           body: { type: "oauth", refresh: "", access: "", expires: 0 },
@@ -3225,7 +3263,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           );
 
           // CLI flow (`opencode auth login`) passes an inputs object.
-          if (inputs) {
+          if (inputs && runtime === "v1") {
             const accounts: Array<Extract<AntigravityTokenExchangeResult, { type: "success" }>> = [];
             const noBrowser = inputs.noBrowser === "true" || inputs["no-browser"] === "true";
             const useManualMode = noBrowser || shouldSkipLocalServer();
@@ -3872,12 +3910,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
           const existingStorage = await loadAccounts();
           const existingCount = existingStorage?.accounts.length ?? 0;
 
-          const useManualFlow = isHeadless || shouldSkipLocalServer();
+          const useManualFlow = isHeadless || inputs?.noBrowser === "true" || shouldSkipLocalServer();
 
           let listener: OAuthListener | null = null;
           if (!useManualFlow) {
             try {
               listener = await startOAuthListener();
+              if (runtime === "v2") oauthListeners.add(listener);
             } catch {
               listener = null;
             }
@@ -3889,6 +3928,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           if (!useManualFlow) {
             const browserOpened = await openBrowser(authorization.url);
             if (!browserOpened) {
+              if (listener) oauthListeners.delete(listener);
               listener?.close().catch(() => {});
               listener = null;
             }
@@ -3902,10 +3942,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
               method: "auto",
               callback: async (): Promise<AntigravityTokenExchangeResult> => {
                 const CALLBACK_TIMEOUT_MS = 30000;
+                let callbackTimer: ReturnType<typeof setTimeout> | undefined;
                 try {
                   const callbackPromise = listener.waitForCallback();
                   const timeoutPromise = new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error("CALLBACK_TIMEOUT")), CALLBACK_TIMEOUT_MS),
+                    callbackTimer = setTimeout(() => reject(new Error("CALLBACK_TIMEOUT")), CALLBACK_TIMEOUT_MS),
                   );
 
                   let callbackUrl: URL;
@@ -3956,6 +3997,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     error: error instanceof Error ? error.message : "Unknown error",
                   };
                 } finally {
+                  if (callbackTimer !== undefined) clearTimeout(callbackTimer);
+                  oauthListeners.delete(listener);
                   try {
                     await listener.close();
                   } catch {
